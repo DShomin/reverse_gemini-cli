@@ -68,8 +68,8 @@ graph LR
     subgraph "External Dependencies"
         React[react]
         Ink[ink]
-        GeminiAPI[@google/genai]
-        MCPsdk[@modelcontextprotocol/sdk]
+        GeminiAPI[google/genai]
+        MCPsdk[modelcontextprotocol/sdk]
         NodePTY[node-pty]
     end
     
