@@ -102,7 +102,7 @@ Claude Code 도구를 활용한 자동 분석의 특성상 다음과 같은 제�
 
 ## 📚 관련 자료
 
-- [Gemini CLI 공식 저장소](https://github.com/google/gemini-cli)
+- [Gemini CLI 공식 저장소](https://github.com/google-gemini/gemini-cli)
 - [Model Context Protocol 사양](https://spec.modelcontextprotocol.io/)
 - [React/Ink 문서](https://github.com/vadimdemedes/ink)
 

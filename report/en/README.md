@@ -103,7 +103,7 @@ Please feel free to create issues if you find any problems or improvements:
 
 ## 📚 Related Resources
 
-- [Gemini CLI Official Repository](https://github.com/google/gemini-cli)
+- [Gemini CLI Official Repository](https://github.com/google-gemini/gemini-cli)
 - [Model Context Protocol Specification](https://spec.modelcontextprotocol.io/)
 - [React/Ink Documentation](https://github.com/vadimdemedes/ink)
 
