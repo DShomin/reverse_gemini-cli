@@ -68,8 +68,8 @@ graph LR
     subgraph "외부 의존성"
         React[react]
         Ink[ink]
-        GeminiAPI[@google/genai]
-        MCPsdk[@modelcontextprotocol/sdk]
+        GeminiAPI[google/genai]
+        MCPsdk[modelcontextprotocol/sdk]
         NodePTY[node-pty]
     end
     
