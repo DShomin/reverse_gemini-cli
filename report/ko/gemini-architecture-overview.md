@@ -141,6 +141,302 @@ sequenceDiagram
     CLI->>User: 출력 표시
 ```
 
+## LLM 처리 워크플로우
+
+### 개요
+LLM(Large Language Model) 처리 워크플로우는 Gemini가 사용자 입력을 처리하고, 컨텍스트를 관리하며, 도구를 실행하고, 응답을 생성하는 방법을 설명합니다. 이 다단계 파이프라인은 도구 실행 기능을 갖춘 지능적이고 컨텍스트 인식 상호작용을 보장합니다.
+
+### 상세한 LLM 입력-출력 워크플로우
+
+```mermaid
+flowchart TB
+    subgraph "입력 처리"
+        UserInput[사용자 입력/프롬프트]
+        ContextHistory[대화 기록]
+        SystemPrompt[시스템 지침]
+        ToolDefs[도구 정의]
+        
+        UserInput --> PromptConstruction
+        ContextHistory --> PromptConstruction
+        SystemPrompt --> PromptConstruction
+        ToolDefs --> PromptConstruction
+        
+        PromptConstruction[프롬프트 빌더]
+    end
+    
+    subgraph "LLM 처리"
+        PromptConstruction --> TokenEncoding[토큰 인코딩]
+        TokenEncoding --> ContextWindow{컨텍스트 윈도우 확인}
+        
+        ContextWindow -->|적합함| LLMInference[LLM 추론]
+        ContextWindow -->|초과함| ContextTruncation[컨텍스트 절단]
+        ContextTruncation --> LLMInference
+        
+        LLMInference --> ResponseGeneration[응답 생성]
+        ResponseGeneration --> ToolDetection{도구 호출 감지?}
+    end
+    
+    subgraph "도구 실행 루프"
+        ToolDetection -->|예| ToolParser[도구 요청 파싱]
+        ToolParser --> ToolValidation[매개변수 검증]
+        ToolValidation --> ToolExecution[도구 실행]
+        ToolExecution --> ToolResult[도구 결과]
+        
+        ToolResult --> ToolPrompt[결과를 프롬프트에 추가]
+        ToolPrompt --> LLMInference
+    end
+    
+    subgraph "출력 생성"
+        ToolDetection -->|아니오| ResponseFormatting[응답 형식화]
+        ResponseFormatting --> StreamingOutput[UI로 스트리밍]
+        StreamingOutput --> TokenUsage[토큰 사용량 업데이트]
+        TokenUsage --> StateUpdate[대화 상태 업데이트]
+        StateUpdate --> UserDisplay[사용자에게 표시]
+    end
+```
+
+### 입력 컴포넌트
+
+#### 1. 사용자 입력 처리
+```mermaid
+graph LR
+    RawInput[원시 사용자 입력] --> InputParser[입력 파서]
+    InputParser --> CommandDetection{명령?}
+    CommandDetection -->|예| CommandProcessor[명령 처리기]
+    CommandDetection -->|아니오| PromptProcessor[프롬프트 처리기]
+    
+    CommandProcessor --> StructuredInput[구조화된 입력]
+    PromptProcessor --> StructuredInput
+    
+    StructuredInput --> ContextBuilder[컨텍스트 빌더]
+```
+
+**입력 유형**:
+- **직접 프롬프트**: 자연어 쿼리 및 지침
+- **명령**: 슬래시 명령 (예: `/edit`, `/search`)
+- **파일 참조**: 파일 포함을 위한 `@filename` 구문
+- **쉘 삽입**: 명령 출력 포함을 위한 `!{command}`
+
+#### 2. 컨텍스트 관리
+```mermaid
+graph TB
+    subgraph "컨텍스트 구성요소"
+        SystemInstructions[시스템 지침]
+        ConversationHistory[대화 기록]
+        FileContext[파일 컨텍스트]
+        ToolContext[도구 가용성]
+        ProjectContext[프로젝트 컨텍스트]
+    end
+    
+    SystemInstructions --> ContextAssembly[컨텍스트 조립]
+    ConversationHistory --> ContextAssembly
+    FileContext --> ContextAssembly
+    ToolContext --> ContextAssembly
+    ProjectContext --> ContextAssembly
+    
+    ContextAssembly --> TokenCounter{토큰 수}
+    TokenCounter -->|제한 내| FinalContext[최종 컨텍스트]
+    TokenCounter -->|초과| PruningStrategy[가지치기 전략]
+    PruningStrategy --> FinalContext
+```
+
+**컨텍스트 우선순위**:
+1. **시스템 지침**: 핵심 동작 정의
+2. **최근 메시지**: 최신 대화 턴
+3. **도구 정의**: 사용 가능한 도구 스키마
+4. **파일 컨텍스트**: 참조된 파일 내용
+5. **이력 컨텍스트**: 오래된 대화 (가지치기 가능)
+
+### LLM 처리 파이프라인
+
+#### 1. 프롬프트 구성
+```typescript
+interface PromptStructure {
+  system: string           // 시스템 지침 및 동작
+  messages: Message[]       // 대화 기록
+  tools: ToolDefinition[]   // 사용 가능한 도구 스키마
+  context: {
+    files: FileContext[]    // 참조된 파일
+    project: ProjectInfo    // 프로젝트 메타데이터
+    memory: MemoryContext   // 영구 메모리
+  }
+}
+```
+
+#### 2. 토큰 관리
+```mermaid
+graph LR
+    TotalTokens[총 토큰] --> InputTokens[입력 토큰]
+    TotalTokens --> OutputReserve[출력 예약]
+    
+    InputTokens --> SystemTokens[시스템: ~2K]
+    InputTokens --> HistoryTokens[기록: 가변]
+    InputTokens --> ToolTokens[도구: ~5K]
+    InputTokens --> ContextTokens[컨텍스트: 가변]
+    
+    OutputReserve --> ResponseTokens[응답: 4K-8K]
+```
+
+**토큰 할당 전략**:
+- **모델 제한**: 128K 토큰 (Gemini 1.5)
+- **입력 예산**: ~120K 토큰
+- **출력 예약**: ~8K 토큰
+- **동적 가지치기**: 가장 오래된 컨텍스트 우선
+
+#### 3. 응답 생성
+```mermaid
+stateDiagram-v2
+    [*] --> Inference
+    Inference --> TextGeneration
+    Inference --> ToolRequest
+    
+    TextGeneration --> Streaming
+    ToolRequest --> ToolExecution
+    
+    ToolExecution --> ToolResponse
+    ToolResponse --> Inference
+    
+    Streaming --> [*]
+```
+
+### 도구 실행 워크플로우
+
+#### 도구 감지 및 파싱
+```mermaid
+sequenceDiagram
+    participant LLM
+    participant Parser as 파서
+    participant Validator as 검증기
+    participant Executor as 실행기
+    participant FileSystem as 파일시스템
+    
+    LLM->>Parser: 도구 호출 JSON
+    Parser->>Validator: 파싱된 매개변수
+    Validator->>Validator: 스키마 검증
+    
+    alt 유효한 매개변수
+        Validator->>Executor: 도구 실행
+        Executor->>FileSystem: 작업 수행
+        FileSystem->>Executor: 작업 결과
+        Executor->>LLM: 도구 응답
+    else 유효하지 않은 매개변수
+        Validator->>LLM: 오류 응답
+    end
+```
+
+#### 도구 유형 및 실행
+```yaml
+내장_도구:
+  - read_file:
+      입력: file_path, range
+      출력: file_contents
+      실행: 동기 파일시스템 읽기
+  
+  - write_file:
+      입력: file_path, content
+      출력: success/error
+      실행: 비동기 파일시스템 쓰기
+  
+  - run_shell:
+      입력: command, timeout
+      출력: stdout, stderr, exit_code
+      실행: 서브프로세스 생성
+  
+  - search:
+      입력: query, path, pattern
+      출력: matched_files, snippets
+      실행: ripgrep 통합
+
+mcp_도구:
+  - 동적_등록: true
+  - 실행: MCP 프로토콜을 통해
+  - 응답: 구조화된 JSON
+```
+
+### 출력 처리
+
+#### 응답 스트리밍
+```mermaid
+graph TB
+    LLMResponse[LLM 응답] --> ChunkDetection{응답 유형}
+    
+    ChunkDetection -->|텍스트| TextChunk[텍스트 청크]
+    ChunkDetection -->|코드| CodeChunk[코드 청크]
+    ChunkDetection -->|도구| ToolChunk[도구 요청]
+    
+    TextChunk --> MarkdownParser[마크다운 파서]
+    CodeChunk --> SyntaxHighlight[구문 하이라이터]
+    ToolChunk --> ToolProcessor[도구 처리기]
+    
+    MarkdownParser --> UIRenderer[UI 렌더러]
+    SyntaxHighlight --> UIRenderer
+    ToolProcessor --> UIRenderer
+    
+    UIRenderer --> TerminalOutput[터미널 표시]
+```
+
+#### 상태 관리
+```typescript
+interface ConversationState {
+  messages: Message[]
+  tokenUsage: {
+    input: number
+    output: number
+    total: number
+  }
+  toolExecutions: ToolExecution[]
+  checkpoints: Checkpoint[]
+  memory: PersistentMemory
+}
+```
+
+### 오류 처리 및 복구
+
+```mermaid
+graph TB
+    Error[오류 감지] --> ErrorType{오류 유형}
+    
+    ErrorType -->|토큰 제한| TokenRecovery[컨텍스트 절단]
+    ErrorType -->|도구 실패| ToolFallback[대안 전략]
+    ErrorType -->|API 오류| APIRetry[백오프로 재시도]
+    ErrorType -->|파싱 오류| ParseRecovery[명확화 요청]
+    
+    TokenRecovery --> RecoveryPrompt[조정된 프롬프트]
+    ToolFallback --> AlternativeTool[대안 사용]
+    APIRetry --> RetryLogic[지수 백오프]
+    ParseRecovery --> UserClarification[사용자에게 문의]
+    
+    RecoveryPrompt --> Reprocess[요청 재처리]
+    AlternativeTool --> Reprocess
+    RetryLogic --> Reprocess
+    UserClarification --> Reprocess
+```
+
+### 성능 최적화
+
+#### 캐싱 전략
+```yaml
+캐시_레이어:
+  토큰_캐시:
+    - 시스템_프롬프트: 영구
+    - 도구_정의: 세션
+    - 일반_응답: LRU 캐시
+  
+  파일_캐시:
+    - 읽기_파일: TTL 5분
+    - 프로젝트_구조: TTL 10분
+  
+  api_캐시:
+    - 모델_구성: 영구
+    - 속도_제한: 동적
+```
+
+#### 스트리밍 최적화
+- **점진적 렌더링**: 청크가 도착하는 대로 표시
+- **병렬 처리**: 스트리밍 중 도구 실행
+- **버퍼 관리**: 효율적인 메모리 사용
+- **청크 집계**: UI 업데이트 감소
+
 ## 주요 설계 원칙
 
 ### 1. 모듈성

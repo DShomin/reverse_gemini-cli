@@ -141,6 +141,302 @@ sequenceDiagram
     CLI->>User: Display output
 ```
 
+## LLM Processing Workflow
+
+### Overview
+The LLM (Large Language Model) processing workflow describes how Gemini processes user input, manages context, executes tools, and generates responses. This multi-stage pipeline ensures intelligent, context-aware interactions with tool execution capabilities.
+
+### Detailed LLM Input-Output Workflow
+
+```mermaid
+flowchart TB
+    subgraph "Input Processing"
+        UserInput[User Input/Prompt]
+        ContextHistory[Conversation History]
+        SystemPrompt[System Instructions]
+        ToolDefs[Tool Definitions]
+        
+        UserInput --> PromptConstruction
+        ContextHistory --> PromptConstruction
+        SystemPrompt --> PromptConstruction
+        ToolDefs --> PromptConstruction
+        
+        PromptConstruction[Prompt Builder]
+    end
+    
+    subgraph "LLM Processing"
+        PromptConstruction --> TokenEncoding[Token Encoding]
+        TokenEncoding --> ContextWindow{Context Window Check}
+        
+        ContextWindow -->|Fits| LLMInference[LLM Inference]
+        ContextWindow -->|Exceeds| ContextTruncation[Context Truncation]
+        ContextTruncation --> LLMInference
+        
+        LLMInference --> ResponseGeneration[Response Generation]
+        ResponseGeneration --> ToolDetection{Tool Call Detected?}
+    end
+    
+    subgraph "Tool Execution Loop"
+        ToolDetection -->|Yes| ToolParser[Parse Tool Request]
+        ToolParser --> ToolValidation[Validate Parameters]
+        ToolValidation --> ToolExecution[Execute Tool]
+        ToolExecution --> ToolResult[Tool Result]
+        
+        ToolResult --> ToolPrompt[Add Result to Prompt]
+        ToolPrompt --> LLMInference
+    end
+    
+    subgraph "Output Generation"
+        ToolDetection -->|No| ResponseFormatting[Format Response]
+        ResponseFormatting --> StreamingOutput[Stream to UI]
+        StreamingOutput --> TokenUsage[Update Token Usage]
+        TokenUsage --> StateUpdate[Update Conversation State]
+        StateUpdate --> UserDisplay[Display to User]
+    end
+```
+
+### Input Components
+
+#### 1. User Input Processing
+```mermaid
+graph LR
+    RawInput[Raw User Input] --> InputParser[Input Parser]
+    InputParser --> CommandDetection{Command?}
+    CommandDetection -->|Yes| CommandProcessor[Command Processor]
+    CommandDetection -->|No| PromptProcessor[Prompt Processor]
+    
+    CommandProcessor --> StructuredInput[Structured Input]
+    PromptProcessor --> StructuredInput
+    
+    StructuredInput --> ContextBuilder[Context Builder]
+```
+
+**Input Types**:
+- **Direct Prompts**: Natural language queries and instructions
+- **Commands**: Slash commands (e.g., `/edit`, `/search`)
+- **File References**: `@filename` syntax for file inclusion
+- **Shell Injections**: `!{command}` for command output inclusion
+
+#### 2. Context Management
+```mermaid
+graph TB
+    subgraph "Context Components"
+        SystemInstructions[System Instructions]
+        ConversationHistory[Conversation History]
+        FileContext[File Context]
+        ToolContext[Tool Availability]
+        ProjectContext[Project Context]
+    end
+    
+    SystemInstructions --> ContextAssembly[Context Assembly]
+    ConversationHistory --> ContextAssembly
+    FileContext --> ContextAssembly
+    ToolContext --> ContextAssembly
+    ProjectContext --> ContextAssembly
+    
+    ContextAssembly --> TokenCounter{Token Count}
+    TokenCounter -->|Within Limit| FinalContext[Final Context]
+    TokenCounter -->|Exceeds| PruningStrategy[Pruning Strategy]
+    PruningStrategy --> FinalContext
+```
+
+**Context Priorities**:
+1. **System Instructions**: Core behavior definitions
+2. **Recent Messages**: Latest conversation turns
+3. **Tool Definitions**: Available tool schemas
+4. **File Context**: Referenced file contents
+5. **Historical Context**: Older conversation (prunable)
+
+### LLM Processing Pipeline
+
+#### 1. Prompt Construction
+```typescript
+interface PromptStructure {
+  system: string           // System instructions and behavior
+  messages: Message[]       // Conversation history
+  tools: ToolDefinition[]   // Available tool schemas
+  context: {
+    files: FileContext[]    // Referenced files
+    project: ProjectInfo    // Project metadata
+    memory: MemoryContext   // Persistent memory
+  }
+}
+```
+
+#### 2. Token Management
+```mermaid
+graph LR
+    TotalTokens[Total Tokens] --> InputTokens[Input Tokens]
+    TotalTokens --> OutputReserve[Output Reserve]
+    
+    InputTokens --> SystemTokens[System: ~2K]
+    InputTokens --> HistoryTokens[History: Variable]
+    InputTokens --> ToolTokens[Tools: ~5K]
+    InputTokens --> ContextTokens[Context: Variable]
+    
+    OutputReserve --> ResponseTokens[Response: 4K-8K]
+```
+
+**Token Allocation Strategy**:
+- **Model Limit**: 128K tokens (Gemini 1.5)
+- **Input Budget**: ~120K tokens
+- **Output Reserve**: ~8K tokens
+- **Dynamic Pruning**: Oldest context first
+
+#### 3. Response Generation
+```mermaid
+stateDiagram-v2
+    [*] --> Inference
+    Inference --> TextGeneration
+    Inference --> ToolRequest
+    
+    TextGeneration --> Streaming
+    ToolRequest --> ToolExecution
+    
+    ToolExecution --> ToolResponse
+    ToolResponse --> Inference
+    
+    Streaming --> [*]
+```
+
+### Tool Execution Workflow
+
+#### Tool Detection and Parsing
+```mermaid
+sequenceDiagram
+    participant LLM
+    participant Parser
+    participant Validator
+    participant Executor
+    participant FileSystem
+    
+    LLM->>Parser: Tool Call JSON
+    Parser->>Validator: Parsed Parameters
+    Validator->>Validator: Schema Validation
+    
+    alt Valid Parameters
+        Validator->>Executor: Execute Tool
+        Executor->>FileSystem: Perform Operation
+        FileSystem->>Executor: Operation Result
+        Executor->>LLM: Tool Response
+    else Invalid Parameters
+        Validator->>LLM: Error Response
+    end
+```
+
+#### Tool Types and Execution
+```yaml
+built_in_tools:
+  - read_file:
+      input: file_path, range
+      output: file_contents
+      execution: sync filesystem read
+  
+  - write_file:
+      input: file_path, content
+      output: success/error
+      execution: async filesystem write
+  
+  - run_shell:
+      input: command, timeout
+      output: stdout, stderr, exit_code
+      execution: subprocess spawn
+  
+  - search:
+      input: query, path, pattern
+      output: matched_files, snippets
+      execution: ripgrep integration
+
+mcp_tools:
+  - dynamic_registration: true
+  - execution: via MCP protocol
+  - response: structured JSON
+```
+
+### Output Processing
+
+#### Response Streaming
+```mermaid
+graph TB
+    LLMResponse[LLM Response] --> ChunkDetection{Response Type}
+    
+    ChunkDetection -->|Text| TextChunk[Text Chunk]
+    ChunkDetection -->|Code| CodeChunk[Code Chunk]
+    ChunkDetection -->|Tool| ToolChunk[Tool Request]
+    
+    TextChunk --> MarkdownParser[Markdown Parser]
+    CodeChunk --> SyntaxHighlight[Syntax Highlighter]
+    ToolChunk --> ToolProcessor[Tool Processor]
+    
+    MarkdownParser --> UIRenderer[UI Renderer]
+    SyntaxHighlight --> UIRenderer
+    ToolProcessor --> UIRenderer
+    
+    UIRenderer --> TerminalOutput[Terminal Display]
+```
+
+#### State Management
+```typescript
+interface ConversationState {
+  messages: Message[]
+  tokenUsage: {
+    input: number
+    output: number
+    total: number
+  }
+  toolExecutions: ToolExecution[]
+  checkpoints: Checkpoint[]
+  memory: PersistentMemory
+}
+```
+
+### Error Handling and Recovery
+
+```mermaid
+graph TB
+    Error[Error Detected] --> ErrorType{Error Type}
+    
+    ErrorType -->|Token Limit| TokenRecovery[Truncate Context]
+    ErrorType -->|Tool Failure| ToolFallback[Fallback Strategy]
+    ErrorType -->|API Error| APIRetry[Retry with Backoff]
+    ErrorType -->|Parse Error| ParseRecovery[Request Clarification]
+    
+    TokenRecovery --> RecoveryPrompt[Adjusted Prompt]
+    ToolFallback --> AlternativeTool[Use Alternative]
+    APIRetry --> RetryLogic[Exponential Backoff]
+    ParseRecovery --> UserClarification[Ask User]
+    
+    RecoveryPrompt --> Reprocess[Reprocess Request]
+    AlternativeTool --> Reprocess
+    RetryLogic --> Reprocess
+    UserClarification --> Reprocess
+```
+
+### Performance Optimizations
+
+#### Caching Strategy
+```yaml
+cache_layers:
+  token_cache:
+    - system_prompt: persistent
+    - tool_definitions: session
+    - common_responses: LRU cache
+  
+  file_cache:
+    - read_files: TTL 5 minutes
+    - project_structure: TTL 10 minutes
+  
+  api_cache:
+    - model_config: persistent
+    - rate_limits: dynamic
+```
+
+#### Streaming Optimizations
+- **Progressive Rendering**: Display as chunks arrive
+- **Parallel Processing**: Tool execution while streaming
+- **Buffer Management**: Efficient memory usage
+- **Chunk Aggregation**: Reduce UI updates
+
 ## Key Design Principles
 
 ### 1. Modularity
